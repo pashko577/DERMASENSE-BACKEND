@@ -13,6 +13,10 @@ dependencies = [
   "httpx>=0.27",                     # PubChem y PostgREST
   "rdkit>=2024.3.1",                 # ~150 MB de wheel binario
   "anthropic>=0.40",
+  # Cliente de los proveedores con API compatible con OpenAI (OpenRouter y Groq).
+  # Es dependencia de produccion, no opcional: `AI_PROVIDER` puede apuntar a
+  # cualquiera de los tres y el servicio tiene que arrancar con todos.
+  "openai>=1.40",
   "openpyxl>=3.1",
   "pyyaml>=6.0",
 ]
