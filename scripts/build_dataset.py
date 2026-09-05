@@ -175,7 +175,14 @@ def main() -> int:
         writer.writeheader()
         writer.writerows(records)
 
+    # Copia que consume el servicio. `app/` no importa de `ml/` (README §2), asi
+    # que lo que cruza esa frontera es este artefacto versionado, no el modulo.
+    served = Path("app/data/validation_kp.csv")
+    served.parent.mkdir(parents=True, exist_ok=True)
+    served.write_text(OUTPUT.read_text(encoding="utf-8"), encoding="utf-8")
+
     print(f"\nescrito {OUTPUT} con {len(records)} compuestos")
+    print(f"copiado a {served} (artefacto que sirve la API)")
 
     replicated = [r for r in records if r["n_measurements"] > 1]  # type: ignore[operator]
     if replicated:

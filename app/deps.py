@@ -231,3 +231,23 @@ def rate_limit(limit: int, window_seconds: float):  # noqa: ANN201 - fabrica de 
         limiter.check(user.id)
 
     return _dependency
+
+
+def public_rate_limit(limit: int, window_seconds: float):  # noqa: ANN201
+    """Limite para endpoints sin sesion, contado por direccion de origen.
+
+    Los endpoints publicos de este servicio no gastan dinero ni tocan datos de
+    usuario, pero siguen consumiendo CPU. La IP es un identificador debil
+    —detras de un proxy todos comparten una— y por eso el limite es generoso:
+    frena un bucle accidental, no a un atacante decidido.
+    """
+    limiter = SlidingWindowLimiter(limit, window_seconds)
+
+    async def _dependency(request: Request) -> None:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        origin = forwarded.split(",")[0].strip() or (
+            request.client.host if request.client else "desconocido"
+        )
+        limiter.check(origin)
+
+    return _dependency

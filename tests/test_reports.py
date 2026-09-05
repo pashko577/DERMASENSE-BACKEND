@@ -192,3 +192,76 @@ def test_notas_del_usuario_no_pueden_cerrar_su_bloque(prepared, auth_headers) ->
 
     assert prompt.count("</notas_usuario>") == 1
     assert "Ignora las reglas" in prompt  # el texto se conserva, neutralizado
+
+
+class TestVistaPrevia:
+    """POST /reports (sin id): informe de una simulacion aun no guardada.
+
+    Es la via que consume el frontend, porque el motor corre en el navegador y
+    produce las metricas antes de que exista ninguna fila en `simulations`.
+    """
+
+    def _payload(self) -> dict:
+        row = simulation_row()
+        return {"input": row["input_snapshot"], "metrics": row["metrics"]}
+
+    def test_genera_sin_simulacion_guardada(self, client, fake_db, auth_headers) -> None:
+        client.app.state.claude = FakeClaude(fragments=["## Resumen\n", "Penetracion baja.\n"])
+
+        response = client.post("/api/v1/reports", headers=auth_headers, json=self._payload())
+
+        assert response.status_code == 200
+        events = _parse_sse(response.text)
+        names = [name for name, _ in events]
+        assert names[0] == "meta" and names[-1] == "done"
+
+        texto = "".join(d["text"] for n, d in events if n == "delta")
+        assert texto == "## Resumen\nPenetracion baja.\n"
+
+    def test_no_persiste_nada(self, client, fake_db, auth_headers) -> None:
+        """Sin simulacion a la que colgarlo, no hay fila en `ai_reports`."""
+        client.app.state.claude = FakeClaude()
+
+        response = client.post("/api/v1/reports", headers=auth_headers, json=self._payload())
+
+        assert response.status_code == 200
+        assert fake_db.inserted == []
+        meta = next(data for name, data in _parse_sse(response.text) if name == "meta")
+        assert meta["persisted"] is False
+
+    def test_proveedor_caido_devuelve_503(self, client, fake_db, auth_headers) -> None:
+        client.app.state.claude = FakeClaude(
+            fail_with=ApiError("AI_UNAVAILABLE", "El servicio de IA no esta disponible.")
+        )
+
+        response = client.post("/api/v1/reports", headers=auth_headers, json=self._payload())
+
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "AI_UNAVAILABLE"
+
+    def test_NO_exige_sesion(self, client, auth_headers) -> None:
+        """Compromiso consciente: la vista previa es publica.
+
+        Sin login no hay a quien limitar por cuota, asi que la unica proteccion
+        es el limite por IP (10/min). Se acepta porque el proveedor por defecto
+        tiene capa gratuita y porque una pantalla que pide login antes de
+        ensenar nada no sirve para una demo.
+
+        El reporte que SI se persiste sigue exigiendo sesion: escribe en la base
+        y consume cuota. Eso lo cubre `test_reporte_completo_emite_sse_y_persiste`.
+        """
+        client.app.state.claude = FakeClaude()
+        response = client.post("/api/v1/reports", json=self._payload())
+        assert response.status_code == 200
+
+    def test_rechaza_metricas_incompletas(self, client, auth_headers) -> None:
+        client.app.state.claude = FakeClaude()
+
+        response = client.post(
+            "/api/v1/reports",
+            headers=auth_headers,
+            json={"input": simulation_row()["input_snapshot"], "metrics": {"logKp": -2.4}},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "VALIDATION_ERROR"

@@ -34,7 +34,7 @@ build-backend = "setuptools.build_meta"
 include = ["app*"]
 
 [tool.setuptools.package-data]
-app = ["rules/*.yaml"]
+app = ["rules/*.yaml", "data/*.csv"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

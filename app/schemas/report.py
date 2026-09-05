@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.simulation import SimulationInput, SimulationMetrics
+
 Jurisdiction = Literal["eu", "us"]
 RuleOutcome = Literal["pass", "attention", "fail", "not_applicable", "unknown"]
 
@@ -19,6 +21,23 @@ class ReportRequest(BaseModel):
 
     notes: str | None = Field(default=None, max_length=2000)
     force_regenerate: bool = False
+
+
+class ReportPreviewRequest(BaseModel):
+    """Reporte sobre una simulacion que todavia no se ha guardado.
+
+    El motor corre en el navegador y produce `input` + `metrics` antes de que
+    exista ninguna fila en `simulations`. El frontend pide el informe en ese
+    momento, asi que necesita una via que no dependa de un `simulation_id`.
+
+    No persiste nada: sin simulacion a la que colgarlo, no hay fila en
+    `ai_reports`. Es una vista previa. El informe definitivo, el que queda
+    guardado y cuenta para la cuota, sigue siendo `POST /reports/{id}`.
+    """
+
+    input: SimulationInput
+    metrics: SimulationMetrics
+    notes: str | None = Field(default=None, max_length=2000)
 
 
 class ReportRecord(BaseModel):

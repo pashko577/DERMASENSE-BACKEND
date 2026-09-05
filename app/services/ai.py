@@ -27,10 +27,11 @@ class ReportGenerator(Protocol):
 
 
 def build_report_generator(settings: Settings) -> ReportGenerator:
-    if settings.ai_provider == "openrouter":
+    if settings.ai_provider in ("openrouter", "groq"):
         # Importacion diferida: quien use Anthropic no necesita el SDK de OpenAI
-        # instalado, y viceversa.
-        from app.services.openrouter import OpenRouterService
+        # instalado, y viceversa. Los dos comparten cliente porque los dos
+        # hablan el formato de OpenAI.
+        from app.services.openrouter import OpenAICompatibleService
 
-        return OpenRouterService(settings)
+        return OpenAICompatibleService(settings)
     return ClaudeService(settings)

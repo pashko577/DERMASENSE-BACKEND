@@ -16,7 +16,7 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 TtsProvider = Literal["browser", "elevenlabs", "azure"]
-AiProvider = Literal["anthropic", "openrouter"]
+AiProvider = Literal["anthropic", "openrouter", "groq"]
 
 
 class Settings(BaseSettings):
@@ -65,6 +65,13 @@ class Settings(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_site_url: str = "http://localhost:3000"
     openrouter_app_name: str = "DERMASENSE"
+
+    # Groq sirve modelos abiertos (no Claude) con latencia muy baja y capa
+    # gratuita. Util como alternativa o respaldo; ver la nota de calidad en
+    # README §4 antes de usarlo para el reporte tecnico.
+    groq_api_key: str | None = None
+    groq_model: str = "openai/gpt-oss-120b"
+    groq_base_url: str = "https://api.groq.com/openai/v1"
 
     # Cuota de reportes por usuario y ventana (docs/AI_PROMPTS.md §5).
     ai_reports_daily_quota: int = 20
@@ -129,6 +136,8 @@ class Settings(BaseSettings):
         """
         if self.ai_provider == "openrouter":
             return bool(self.openrouter_api_key)
+        if self.ai_provider == "groq":
+            return bool(self.groq_api_key)
         return bool(self.anthropic_api_key)
 
     @property
@@ -136,14 +145,40 @@ class Settings(BaseSettings):
         """Identificador del modelo tal como lo espera el proveedor activo."""
         if self.ai_provider == "openrouter":
             return self.openrouter_model
+        if self.ai_provider == "groq":
+            return self.groq_model
         return self.anthropic_model
 
     @property
     def ai_key_variable(self) -> str:
         """Nombre de la variable que hay que definir. Para mensajes de error utiles."""
-        return (
-            "OPENROUTER_API_KEY" if self.ai_provider == "openrouter" else "ANTHROPIC_API_KEY"
-        )
+        return {
+            "openrouter": "OPENROUTER_API_KEY",
+            "groq": "GROQ_API_KEY",
+        }.get(self.ai_provider, "ANTHROPIC_API_KEY")
+
+    @property
+    def ai_api_key(self) -> str | None:
+        """Credencial del proveedor activo."""
+        return {
+            "openrouter": self.openrouter_api_key,
+            "groq": self.groq_api_key,
+        }.get(self.ai_provider, self.anthropic_api_key)
+
+    @property
+    def ai_base_url(self) -> str:
+        """Endpoint compatible con OpenAI del proveedor activo."""
+        return self.groq_base_url if self.ai_provider == "groq" else self.openrouter_base_url
+
+    @property
+    def ai_extra_headers(self) -> dict[str, str]:
+        """Cabeceras de atribucion. Solo OpenRouter las usa; Groq las ignora."""
+        if self.ai_provider == "openrouter":
+            return {
+                "HTTP-Referer": self.openrouter_site_url,
+                "X-Title": self.openrouter_app_name,
+            }
+        return {}
 
 
 @lru_cache(maxsize=1)

@@ -1,0 +1,30 @@
+# Render — despliegue del backend.
+# Dashboard → New → Blueprint, apunta a este repositorio y detecta este archivo.
+services:
+  - type: web
+    name: dermasense-backend
+    runtime: docker
+    plan: starter          # RDKit son ~150 MB: la capa gratuita se suspende a los 15 min
+    region: oregon
+    healthCheckPath: /health
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        value: ""          # proyecto con firma asimetrica: se usa el JWKS
+      - key: AI_PROVIDER
+        value: groq
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: AI_MAX_TOKENS
+        value: "2000"
+      - key: TTS_PROVIDER
+        value: browser
+      - key: ENVIRONMENT
+        value: production
+      - key: CORS_ORIGINS
+        sync: false        # el dominio de Vercel, cuando lo tengas

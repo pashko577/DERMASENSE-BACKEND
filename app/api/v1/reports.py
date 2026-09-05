@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
@@ -26,10 +26,10 @@ from fastapi import APIRouter, Depends, Path, Request
 from fastapi.responses import StreamingResponse
 
 from app.config import Settings, get_settings
-from app.deps import CurrentUser, CurrentUserDep, DbDep, rate_limit
+from app.deps import CurrentUser, CurrentUserDep, DbDep, public_rate_limit, rate_limit
 from app.errors import ApiError
 from app.prompts.report_es import build_user_prompt
-from app.schemas.report import ReportRequest
+from app.schemas.report import ReportPreviewRequest, ReportRequest
 from app.schemas.simulation import SimulationRecord
 from app.services.ai import ReportGenerator
 from app.services.claude import StreamAccounting
@@ -90,6 +90,122 @@ async def _assert_quota(db: DbDep, settings: Settings) -> None:
 
 def _sse(event: str, data: dict[str, object]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _stream_response(
+    stream: AsyncIterator[str],
+    first: str,
+    accounting: StreamAccounting,
+    settings: Settings,
+    *,
+    meta: dict[str, object],
+    on_complete: Callable[[], Awaitable[dict[str, object]]] | None = None,
+) -> StreamingResponse:
+    """Envuelve un stream ya iniciado en una respuesta SSE.
+
+    Recibe el primer fragmento ya consumido: quien llama lo hace fuera para que
+    un proveedor caido produzca un 503 de verdad en lugar de un 200 con el error
+    escondido en el cuerpo.
+    """
+
+    async def emit() -> AsyncIterator[str]:
+        yield _sse("meta", meta)
+        yield _sse("delta", {"text": first})
+
+        try:
+            async for fragment in stream:
+                yield _sse("delta", {"text": fragment})
+        except ApiError as exc:
+            yield _sse("error", exc.payload()["error"])
+            return
+
+        extra: dict[str, object] = {}
+        if on_complete is not None:
+            try:
+                extra = await on_complete()
+            except ApiError as exc:
+                yield _sse("error", exc.payload()["error"])
+                return
+
+        yield _sse(
+            "done",
+            {
+                "input_tokens": accounting.input_tokens,
+                "output_tokens": accounting.output_tokens,
+                "characters": len(accounting.text),
+                "truncated": accounting.truncated,
+                **extra,
+            },
+        )
+
+    return StreamingResponse(
+        emit(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            # Render y varios proxies bufferizan por defecto y anulan el
+            # streaming: sin esto el usuario espera el bloque completo.
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post(
+    "",
+    summary="Reporte de una simulacion todavia no guardada (text/event-stream)",
+    response_class=StreamingResponse,
+)
+async def preview_report(
+    request: Request,
+    payload: ReportPreviewRequest,
+    settings: Annotated[Settings, Depends(get_settings)],
+    _: None = Depends(public_rate_limit(10, 60.0)),
+) -> StreamingResponse:
+    """Vista previa: interpreta metricas sin exigir que la simulacion exista.
+
+    El motor corre en el navegador y produce las metricas antes de que haya
+    ninguna fila en `simulations`; el frontend pide el informe en ese momento.
+    Sin `simulation_id` no hay donde colgar el reporte, asi que **no se
+    persiste** y no consume la cuota de `ai_reports`. Lo que si aplica es el
+    limite por usuario de este endpoint, que es lo que impide convertirlo en un
+    grifo abierto de tokens.
+
+    **No exige sesion**, a diferencia del reporte persistido. Es un compromiso
+    consciente: sin login no hay a quien cobrarle ni a quien limitar por cuota,
+    asi que la unica proteccion es el limite por IP de este endpoint (10/min).
+    Se acepta porque el proveedor por defecto (Groq) tiene capa gratuita y
+    porque una pantalla que pide login antes de ensenar nada no sirve para una
+    demo. Con un proveedor de pago conviene volver a cerrarlo.
+
+    El reporte que **si** se guarda —`POST /reports/{simulation_id}`— sigue
+    exigiendo identidad: escribe en la base y consume cuota.
+    """
+    if not settings.ai_enabled:
+        raise ApiError(
+            "AI_UNAVAILABLE",
+            f"La generacion de reportes no esta configurada: falta {settings.ai_key_variable}.",
+        )
+
+    prompt = build_user_prompt(payload.input, payload.metrics, payload.notes)
+    service: ReportGenerator = request.app.state.claude
+    accounting = StreamAccounting()
+    stream = service.stream_report(prompt, accounting)
+
+    try:
+        first = await anext(stream)
+    except StopAsyncIteration:
+        raise ApiError(
+            "AI_UNAVAILABLE", "El servicio de IA devolvio una respuesta vacia."
+        ) from None
+
+    return _stream_response(
+        stream,
+        first,
+        accounting,
+        settings,
+        meta={"model": settings.ai_model, "persisted": False},
+    )
 
 
 @router.post(
