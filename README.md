@@ -95,6 +95,11 @@ ese usuario**, de modo que las políticas RLS de
 [ADR-003](../DERMASENSE/docs/adr/003-supabase-rls.md) siguen siendo la última línea de
 defensa incluso si un endpoint tuviera un bug de filtrado.
 
+La firma se verifica de las dos formas que emite Supabase: contra
+`SUPABASE_JWT_SECRET` si el token viene con HS256, y contra el JWKS público del
+proyecto si viene con ES256/RS256 —el modo por defecto en proyectos nuevos—. El
+algoritmo del propio token decide cuál se usa.
+
 ---
 
 ## 2. Estructura del proyecto
@@ -119,7 +124,9 @@ DERMASENSE-BACKEND/
 │   ├── services/
 │   │   ├── rdkit_descriptors.py     # la razón fuerte de que este servicio sea Python
 │   │   ├── pubchem.py               # PUG-REST con límite de 5 req/s y caché en disco
+│   │   ├── ai.py                    # selecciona proveedor; el contrato que consume reports.py
 │   │   ├── claude.py                # cliente Anthropic, streaming, contabilidad de tokens
+│   │   ├── openrouter.py            # mismo contrato, transporte OpenAI-compatible
 │   │   ├── tts.py                   # Protocol + implementaciones intercambiables
 │   │   ├── excel.py                 # openpyxl, una hoja por sección del README §16
 │   │   └── regulatory_rules.py      # evaluador de las reglas YAML
@@ -141,18 +148,28 @@ DERMASENSE-BACKEND/
 │
 ├── ml/                              # ⚠ NUNCA se importa desde app/ en tiempo de ejecución
 │   ├── datasets/
-│   │   └── flynn.csv                # dataset de permeabilidad — pendiente
+│   │   ├── README.md                # columnas y procedencia
+│   │   └── huskindb_kp.csv          # 229 compuestos con log Kp medido en piel humana
+│   ├── artifacts/
+│   │   └── kp_ridge.json            # modelo + métricas; in_production: false
 │   ├── notebooks/
-│   └── train_kp.py                  # ridge + LOO; roadmap, no MVP
+│   └── train_kp.py                  # ridge + LOO contra la línea base Potts-Guy
 │
 ├── scripts/
+│   ├── build_dataset.py             # HuskinDB → conjunto de entrenamiento
 │   ├── curate_ingredients.py        # asistente de curación de los ~60 activos
+│   ├── debug_routes.py              # recorre TODAS las rutas y las verifica
+│   ├── dev_token.py                 # firma un JWT local para probar con curl
 │   └── verify_no_secrets.py         # gancho previo al commit
 │
 ├── tests/
+│   ├── conftest.py                  # doble de PostgREST, JWT de prueba, app aislada
 │   ├── test_descriptors.py          # RDKit contra valores conocidos de PubChem
 │   ├── test_reports.py              # ERROR CRÍTICO: proveedor de IA caído → 503
-│   ├── test_regulatory.py
+│   ├── test_regulatory.py           # y: ausencia de regla ≠ aprobación
+│   ├── test_exports.py              # las 7 hojas existen y no inventan datos
+│   ├── test_ml.py                   # el artefacto no se declara productivo si no gana
+│   ├── test_ai_provider.py          # cableado del proveedor y tope de tokens
 │   └── test_auth.py                 # 401 sin JWT · 403 con recurso ajeno
 │
 ├── pyproject.toml
@@ -238,11 +255,11 @@ Las métricas de la simulación siguen visibles y guardables: es la propiedad qu
 | Framework | FastAPI + Uvicorn | — | Tipado con Pydantic, SSE nativo, OpenAPI automático |
 | Química | **RDKit** (`pip install rdkit`) | Gratis, BSD | Estándar de facto; sin equivalente en JS |
 | Datos moleculares | **PubChem PUG-REST** | Gratis, sin clave | CID estable, mantenido por el NIH |
-| LLM | **Claude API** — `claude-sonnet-5` | $2 / $10 por MTok | Fijado en [TRD §1](../DERMASENSE/docs/TRD.md); `claude-opus-5` ($5/$25) es el salto de calidad si el reporte se ve pobre |
+| LLM | **`claude-sonnet-5`** vía Anthropic **o** OpenRouter | $2 / $10 por MTok | Fijado en [TRD §1](../DERMASENSE/docs/TRD.md); `claude-opus-5` ($5/$25) es el salto de calidad si el reporte se ve pobre |
 | Voz | **Web Speech API** (navegador) | Gratis | Cero infraestructura, cero clave, cero latencia de red |
 | Voz (upgrade) | ElevenLabs o Azure Neural TTS | ~$5/mes o capa gratuita | Solo si la calidad del español lo justifica en el pitch |
 | Excel | `openpyxl` | Gratis | Escribe XLSX con estilos sin depender de Office |
-| Base de datos | Supabase (PostgreSQL) | Capa gratuita | Ya en uso; RLS es la frontera de seguridad (ADR-003) |
+| Base de datos | Supabase (PostgreSQL) | Capa gratuita | Ya en uso; RLS es la frontera de seguridad (ADR-003). Se habla con PostgREST vía `httpx`, no con el SDK: ver §10 |
 | Alojamiento | **Render** o **Fly.io** | ~$7/mes | Contenedor persistente. **Vercel no sirve**: ver §7 |
 | Pruebas | `pytest` + `pytest-asyncio` + `respx` | Gratis | `respx` simula PubChem y Anthropic sin gastar tokens |
 
@@ -260,7 +277,6 @@ dependencies = [
   "rdkit",                       # ~150 MB de wheel binario
   "anthropic",
   "openpyxl",
-  "supabase",
   "pyyaml",
 ]
 
@@ -270,47 +286,77 @@ dev = ["pytest", "pytest-asyncio", "respx", "ruff", "mypy"]
 
 ---
 
-## 5. Machine Learning: la respuesta honesta
+## 5. Machine Learning: el resultado medido
 
-**Hoy no hay modelo de ML, y no es una carencia: es una decisión documentada.**
+**Hay un modelo entrenado, con datos reales, y no supera a Potts-Guy.**
+Eso no es un fracaso: es el hallazgo, y está medido.
 
-[ADR-002](../DERMASENSE/docs/adr/002-modelo-potts-guy.md) lo descartó de forma explícita:
+### Los datos
 
-> **Alternativas descartadas — Modelo de ML:** no disponemos de un conjunto de datos de
-> permeabilidad, y entrenar uno con datos sintéticos sería fabricar credibilidad falsa.
+[ADR-002](../DERMASENSE/docs/adr/002-modelo-potts-guy.md) descartó el ML porque no
+había conjunto de permeabilidad. Ahora lo hay:
 
-Lo que el README principal llama *"Machine Learning / QSPR"* es esto, ya implementado en
-[`qspr.ts`](../DERMASENSE/packages/engine/qspr.ts):
+> **HuskinDB** — Fröhlich et al. (2020), *Scientific Data* 7:414
+> [doi:10.1038/s41597-020-00764-z](https://doi.org/10.1038/s41597-020-00764-z) ·
+> datos en [osf.io/26hdm](https://osf.io/26hdm/)
 
-```text
-log Kp = -2.7 + 0.71 · logP − 0.0061 · MW        Potts & Guy (1992)
+546 mediciones de permeación en **piel humana**, cada una con su referencia y su
+DOI. Acceso abierto: un revisor puede descargarlo y rehacer el cálculo.
+
+`scripts/build_dataset.py` lo convierte en el conjunto de entrenamiento. Hace tres
+transformaciones, todas explícitas en el código:
+
+1. `log Kp` viene en **cm/s** y Potts-Guy trabaja en **cm/h** → se suma log₁₀(3600).
+2. Los descriptores no vienen en el archivo → **RDKit los calcula desde el SMILES**.
+   Por eso son `estimated`, nunca `verified`, y el modelo hereda ese nivel.
+3. Un compuesto aparece varias veces con condiciones distintas → se agrega por
+   mediana, conservando la dispersión.
+
+Resultado: **229 compuestos** dentro del dominio de aplicabilidad (MW ≤ 500,
+logP ∈ [-1, 6]).
+
+### El resultado
+
+```
+python scripts/build_dataset.py
+python ml/train_kp.py
 ```
 
-No hay servicio que contratar ni endpoint de ML que llamar. Lo que sí existen son **tres
-capas que se confunden con facilidad**:
+| Modelo | MAE | RMSE | R² |
+|---|---|---|---|
+| Ridge LOO (MW + logP) | 0.900 | 1.199 | 0.212 |
+| **Potts-Guy (1992)** | **0.898** | 1.304 | 0.066 |
+
+Añadir TPSA, donores y aceptores lo **empeora** (MAE 0.920): el síntoma clásico
+de sobreajuste con pocos datos.
+
+### Por qué el listón es tan alto
+
+El dato que decide todo: **82 compuestos tienen medición repetida, y la dispersión
+mediana entre laboratorios es 0,96 unidades de log Kp** para la misma molécula.
+
+Ese es el suelo de error. Un modelo que mejorase 0,05 unidades sobre una
+correlación publicada de 1992, en datos que varían 0,96 entre sí, no habría
+mejorado nada: habría presentado ruido con mejor formato. Por eso `train_kp.py`
+exige batir la línea base **por encima del ruido experimental** antes de declarar
+nada, y por eso el artefacto sale marcado `in_production: false`.
+
+El motor sigue con Potts-Guy, ahora por una razón medida en lugar de por ausencia
+de datos.
+
+### Las tres capas que se confunden
 
 | Capa | Herramienta | Naturaleza | Nivel del dato |
 |---|---|---|---|
 | Descriptores desde estructura | RDKit | Librería local, no API | ⚠️ Estimado — logP calculado |
-| Datos experimentales | PubChem PUG-REST | API pública | ✅ Verificado *si* el logP es experimental |
+| Datos experimentales | PubChem · HuskinDB | API pública · dataset citable | ✅ Verificado *si* la medida es experimental |
 | Predicción de permeabilidad | Potts-Guy | Aritmética | ✅ Publicada y citable |
 
 **El matiz que decide la credibilidad del catálogo:** PubChem devuelve casi siempre
-`XLogP3`, que es calculado por computadora, no medido. Un error de 0.5 unidades en logP
-desplaza `log Kp` en 0.35, un factor de más de 2 en permeabilidad. Por eso
-[DATA_SOURCES §3.2](../DERMASENSE/docs/DATA_SOURCES.md) decidió **curación manual** de unos
-60 activos en lugar de importación automática. RDKit y PubChem sirven para *poblar y
-verificar* el catálogo, nunca para predecir.
-
-### Cuándo entra scikit-learn
-
-Cuando exista `ml/datasets/flynn.csv`: el conjunto clásico de permeabilidad percutánea
-(~90 compuestos) del que se derivó la propia correlación de Potts-Guy.
-
-Con menos de 100 puntos un RandomForest sobreajusta y produce un R² engañoso. Lo defendible
-es **regresión ridge sobre 3-4 descriptores con validación leave-one-out**, publicando MAE
-y RMSE junto a cada predicción. Mientras eso no exista y no esté validado, `ml/` permanece
-fuera del camino de ejecución.
+`XLogP3`, que es calculado por computadora, no medido. Un error de 0.5 unidades en
+logP desplaza `log Kp` en 0.35, un factor de más de 2 en permeabilidad. Por eso
+[DATA_SOURCES §3.2](../DERMASENSE/docs/DATA_SOURCES.md) decidió **curación manual**
+de unos 60 activos en lugar de importación automática.
 
 ---
 
@@ -379,10 +425,45 @@ uvicorn app.main:app --reload      # http://localhost:8000/docs
 Pruebas y calidad:
 
 ```bash
-pytest
-pytest --cov=app
+pytest                                   # 63 pruebas, sin red ni tokens gastados
+pytest -k reports -v                     # solo el comportamiento ante fallo de IA
 ruff check . && mypy app
+python scripts/verify_no_secrets.py      # ninguna credencial versionada
 ```
+
+**Recorrido de todas las rutas, con IA real.** `scripts/debug_routes.py` ejercita
+cada endpoint —RDKit, PubChem, reglas, Excel, JWT y el proveedor de IA de
+verdad— y sustituye únicamente PostgreSQL:
+
+```bash
+python scripts/debug_routes.py            # 34 comprobaciones, gasta ~$0,015
+python scripts/debug_routes.py --no-ai    # sin llamar al modelo
+```
+
+Además de los códigos de estado comprueba el **contenido** del reporte: que
+respete la estructura del prompt, que etiquete la irritación como heurística, que
+no se trunque, y que no aparezca ninguna frase que sobredeclare seguridad.
+
+**Modelo de permeabilidad:**
+
+```bash
+python scripts/build_dataset.py           # HuskinDB → 229 compuestos
+python ml/train_kp.py                     # ridge + LOO contra Potts-Guy
+```
+
+Para probar la API a mano hace falta un JWT. `scripts/dev_token.py` firma uno con
+el `SUPABASE_JWT_SECRET` local —no sirve contra el Supabase real, y esa es la
+idea—:
+
+```bash
+uvicorn app.main:app --reload
+TOKEN=$(python scripts/dev_token.py)
+curl -s localhost:8000/health
+curl -s -X POST localhost:8000/api/v1/descriptors      -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json"      -d '{"smiles": "CC(=O)Oc1ccccc1C(=O)O"}'
+```
+
+Si el proyecto firma con claves asimétricas no hay secreto que compartir: el token
+sale de la sesión real del frontend (`supabase.auth.getSession()`).
 
 ### Variables de entorno
 
@@ -390,9 +471,13 @@ ruff check . && mypy app
 |---|---|---|
 | `SUPABASE_URL` | servidor | URL del proyecto Supabase |
 | `SUPABASE_ANON_KEY` | servidor | Clave anónima; las consultas viajan con el JWT del usuario |
-| `SUPABASE_JWT_SECRET` | **secreto** | Verificación de firma del token |
+| `SUPABASE_JWT_SECRET` | **secreto** | Verificación de firma HS256. Vacío en proyectos con claves asimétricas |
+| `SUPABASE_JWKS_URL` | servidor | Solo si el JWKS no está en la ruta estándar del proyecto |
+| `AI_PROVIDER` | servidor | `anthropic` (por defecto) · `openrouter` |
 | `ANTHROPIC_API_KEY` | **secreto** | Clave de la API de Claude |
 | `ANTHROPIC_MODEL` | servidor | Por defecto `claude-sonnet-5` |
+| `OPENROUTER_API_KEY` | **secreto** | Alternativa; sirve el mismo modelo a la misma tarifa |
+| `AI_MAX_TOKENS` | servidor | Por defecto 2000. Con 1200 el reporte sale cortado |
 | `TTS_PROVIDER` | servidor | `browser` (por defecto) · `elevenlabs` · `azure` |
 | `TTS_API_KEY` | **secreto** | Solo si `TTS_PROVIDER` no es `browser` |
 | `CORS_ORIGINS` | servidor | Dominios del frontend, separados por coma |
@@ -429,18 +514,63 @@ git grep -iE "sk-ant|service_role|eyJhbGci"         # sin resultados
 
 ## 10. Estado
 
-Repositorio recién inicializado. Nada implementado todavía.
+Servicio implementado, con la suite en verde. Lo que falta es dato, no código.
 
 | Bloque | Estado |
 |---|---|
-| Scaffold FastAPI, config, verificación de JWT | Pendiente |
-| `POST /descriptors` con RDKit | Pendiente |
-| `POST /reports/{id}` con Claude y SSE | Pendiente |
-| `GET /exports/{id}.xlsx` | Pendiente |
-| Reglas regulatorias en YAML | Pendiente |
-| Fachada de voz | Pendiente |
-| Curación de los ~60 activos | Pendiente |
-| Modelo de ML | Bloqueado por el dataset de Flynn — roadmap |
+| Scaffold FastAPI, config, verificación de JWT | **Hecho** — firma simétrica y asimétrica |
+| `POST /descriptors` con RDKit | **Hecho** — 180.16 / 1.31 / 63.6 para aspirina |
+| `POST /ingredients/resolve` con PubChem | **Hecho** — 5 req/s y caché en disco |
+| `POST /reports/{id}` con Claude y SSE | **Hecho** — 503 sin escritura ante fallo |
+| `GET /exports/{id}.xlsx` | **Hecho** — 7 hojas más portada |
+| `POST /regulatory/check` | **Hecho** — 1223/2009 y MoCRA en YAML |
+| Fachada de voz | **Hecho** — navegador por defecto; ElevenLabs y Azure tras el `Protocol` |
+| Reportes con IA real | **Verificado** — OpenRouter · `anthropic/claude-sonnet-5` |
+| Modelo de ML | **Entrenado y medido** — no supera a Potts-Guy (§5) |
+| Pruebas | **63 en verde** (`pytest`) · **34/34** rutas (`debug_routes.py`) · `ruff` limpio |
+| Proyecto Supabase real y migraciones | Pendiente — bloquea todo lo que toca la base de datos |
+| Curación de los ~60 activos | Pendiente — `scripts/curate_ingredients.py` ya asiste el proceso |
+| Prueba de aislamiento entre dos usuarios | Pendiente — requiere Supabase real |
+
+### Tres desviaciones respecto al diseño original
+
+1. **PostgREST por `httpx` en lugar del SDK `supabase`.** El SDK está pensado
+   para un cliente de larga vida con sesión propia; aquí hace falta lo
+   contrario: un cliente efímero que porta el JWT de *esta* petición y muere con
+   ella. Un singleton compartido haría que `auth.uid()` dejara de corresponder al
+   solicitante, y esa es exactamente la puerta por la que se cuela
+   `service_role`.
+
+2. **Verificación de JWT con dos modos.** Los proyectos nuevos de Supabase firman
+   con claves asimétricas (ES256/RS256) y no exponen `SUPABASE_JWT_SECRET`. El
+   servicio lee el algoritmo del token y verifica contra el secreto o contra el
+   JWKS del proyecto, sin que el resto del código se entere de cuál toca.
+
+3. **Proveedor de IA intercambiable.** `AI_PROVIDER` elige entre Anthropic
+   directo y OpenRouter. El modelo es el mismo (`claude-sonnet-5`) y la tarifa
+   también; solo cambia el transporte, así que TRD §1 sigue siendo cierto.
+
+4. **`AI_MAX_TOKENS` sube de 1200 a 2000.** Medido: el reporte en español ocupa
+   ~1360 tokens y con el tope de `docs/AI_PROMPTS.md` salía cortado a mitad de
+   frase, sin error de por medio. El evento `done` ahora incluye `truncated`.
+
+5. **El ML dejó de ser roadmap.** Hay dataset citable (HuskinDB), entrenamiento
+   con validación leave-one-out y un veredicto medido. Ver §5.
+
+6. **Un código de error nuevo: `DEPENDENCY_UNAVAILABLE` (503).** Cuando falta
+   RDKit, o cuando el TTS delega en el navegador, reutilizar `AI_UNAVAILABLE`
+   mentiría sobre la causa. Los códigos del [TRD §3](../DERMASENSE/docs/TRD.md)
+   siguen siendo válidos; este se suma.
+
+### El siguiente paso real
+
+Todo lo que toca la base de datos —reportes, exportación, catálogo— está escrito
+pero **nunca se ha ejecutado contra un Supabase real**: las pruebas usan un doble
+de PostgREST, que verifica el comportamiento del servicio pero no las políticas
+RLS. Crear el proyecto y correr las migraciones de
+[`BACKEND_SCHEMA.md`](../DERMASENSE/docs/BACKEND_SCHEMA.md) es lo que convierte
+esto en un servicio verificado de extremo a extremo, en el orden que fija
+[`conexion.md`](conexion.md) §7.
 
 ---
 

@@ -1,0 +1,24 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Secretos: solo .env.example entra al repositorio
+.env
+.env.*
+!.env.example
+
+# Cache en disco de PubChem
+.cache/
+
+# Artefactos de ml/ (nunca se importan desde app/)
+ml/artifacts/
+*.ipynb_checkpoints/

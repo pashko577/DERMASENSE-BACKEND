@@ -1,0 +1,143 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Reglamento (CE) 1223/2009 — Anexos II y III
+#
+# Las reglas son DATOS, no codigo (README §2). Un formulador tiene que poder
+# auditar este archivo sin leer una linea de Python: cada entrada lleva su cita,
+# su fecha de verificacion y el texto que la sustenta.
+#
+# Los anexos se modifican varias veces al ano. `checked_at` es la fecha en que
+# se contrasto la entrada, no una garantia de vigencia: cuando envejece, la API
+# lo advierte en la respuesta.
+# ─────────────────────────────────────────────────────────────────────────────
+jurisdiction: eu
+regulation: "Reglamento (CE) 1223/2009"
+authority: "Comision Europea"
+version: "texto consolidado"
+checked_at: "2026-09-05"
+source: "https://eur-lex.europa.eu/legal-content/ES/TXT/?uri=CELEX%3A32009R1223"
+disclaimer: >-
+  Verificacion preliminar basada en reglas. No sustituye el Informe de Seguridad
+  del Producto Cosmetico (Anexo I) ni la evaluacion de una persona cualificada.
+  Contrastar siempre contra el texto consolidado vigente en EUR-Lex y CosIng.
+
+# Umbral a partir del cual un valor dentro del limite se marca como 'attention'.
+# Formular al 95 % de un maximo legal no es un incumplimiento, pero deja sin
+# margen ante la variabilidad del proceso, y eso merece decirse.
+proximity_ratio: 0.8
+
+rules:
+  - id: eu-annex-ii-hydroquinone
+    type: prohibited
+    requirement: "Anexo II — sustancias prohibidas en productos cosmeticos"
+    identifiers:
+      names: ["hidroquinona", "hydroquinone"]
+      cas: ["123-31-9"]
+    message: >-
+      Sustancia prohibida en productos cosmeticos (Anexo II, entrada 1339). Solo
+      se admite en sistemas de unas artificiales de uso profesional bajo las
+      condiciones del Anexo III, entrada 14.
+    source: "Reglamento (CE) 1223/2009, Anexo II, entrada 1339"
+    checked_at: "2026-09-05"
+
+  - id: eu-annex-iii-salicylic-acid
+    type: restricted
+    requirement: "Anexo III — restricciones de uso"
+    identifiers:
+      names: ["acido salicilico", "salicylic acid"]
+      cas: ["69-72-7"]
+    limits:
+      - product_types: ["rinse_off_hair"]
+        max_pct: 3.0
+      - product_types: ["leave_on", "rinse_off", "other"]
+        max_pct: 2.0
+    conditions:
+      - "No usar en productos para ninos menores de 3 anos, salvo champus."
+      - "No usar en aplicaciones que puedan generar exposicion pulmonar por inhalacion."
+      - "Restricciones distintas aplican a su uso como conservante (Anexo V, entrada 3)."
+    message: >-
+      Uso restringido por el Anexo III (entrada 98). El limite depende del tipo
+      de producto y no cubre su funcion como conservante.
+    source: "Reglamento (CE) 1223/2009, Anexo III, entrada 98"
+    checked_at: "2026-09-05"
+
+  - id: eu-annex-iii-retinol
+    type: restricted
+    requirement: "Anexo III — vitamina A y derivados"
+    identifiers:
+      names:
+        - "retinol"
+        - "acetato de retinilo"
+        - "retinyl acetate"
+        - "palmitato de retinilo"
+        - "retinyl palmitate"
+      cas: ["68-26-8"]
+    limits:
+      - product_types: ["body_lotion"]
+        max_pct: 0.05
+      - product_types: ["leave_on", "rinse_off", "other"]
+        max_pct: 0.3
+    conditions:
+      - "El limite se expresa como equivalente de retinol."
+      - >-
+        Etiquetado obligatorio advirtiendo de la ingesta total de vitamina A
+        procedente de otras fuentes.
+    message: >-
+      Restringido por el Reglamento (UE) 2024/996, que modifico el Anexo III
+      para la vitamina A y sus derivados.
+    source: "Reglamento (UE) 2024/996, que modifica el Anexo III del Reg. (CE) 1223/2009"
+    checked_at: "2026-09-05"
+
+  - id: eu-annex-iii-kojic-acid
+    type: restricted
+    requirement: "Anexo III — restricciones de uso"
+    identifiers:
+      names: ["acido kojico", "kojic acid"]
+      cas: ["501-30-4"]
+    limits:
+      - product_types: ["leave_on", "rinse_off", "other", "face", "hand"]
+        max_pct: 1.0
+    conditions:
+      - "Limitado a productos para cara y manos."
+    message: >-
+      Restringido al 1 % en productos para cara y manos por el Reglamento (UE)
+      2024/996, por su potencial actividad de alteracion endocrina.
+    source: "Reglamento (UE) 2024/996, que modifica el Anexo III del Reg. (CE) 1223/2009"
+    checked_at: "2026-09-05"
+
+  - id: eu-annex-iii-alpha-arbutin
+    type: restricted
+    requirement: "Anexo III — restricciones de uso"
+    identifiers:
+      names: ["alfa-arbutina", "alpha-arbutin", "arbutina", "arbutin"]
+      cas: ["84380-01-8", "497-76-7"]
+    limits:
+      - product_types: ["face", "leave_on"]
+        max_pct: 2.0
+      - product_types: ["body_lotion", "rinse_off", "other"]
+        max_pct: 0.5
+    conditions:
+      - "El limite difiere entre cremas faciales y lociones corporales."
+    message: >-
+      Restringida por el Reglamento (UE) 2024/996 al modificar el Anexo III para
+      arbutina y alfa-arbutina.
+    source: "Reglamento (UE) 2024/996, que modifica el Anexo III del Reg. (CE) 1223/2009"
+    checked_at: "2026-09-05"
+
+# Requisitos que aplican con independencia del activo.
+obligations:
+  - id: eu-annex-i-safety-report
+    requirement: "Anexo I — Informe sobre la seguridad del producto cosmetico"
+    message: >-
+      Todo producto comercializado en la UE necesita un Informe de Seguridad
+      firmado por un evaluador cualificado. Una simulacion in silico puede ser un
+      insumo de ese informe; nunca lo sustituye.
+    source: "Reglamento (CE) 1223/2009, articulo 10 y Anexo I"
+    checked_at: "2026-09-05"
+
+  - id: eu-cpnp-notification
+    requirement: "Notificacion en el CPNP antes de la comercializacion"
+    message: >-
+      La persona responsable debe notificar el producto en el Portal de
+      Notificacion de Productos Cosmeticos antes de ponerlo en el mercado.
+    source: "Reglamento (CE) 1223/2009, articulo 13"
+    checked_at: "2026-09-05"

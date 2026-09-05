@@ -1,0 +1,81 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# MoCRA — Modernization of Cosmetics Regulation Act of 2022 (EE. UU.)
+#
+# A diferencia del Reglamento europeo, MoCRA no publica anexos de limites de
+# concentracion por sustancia: impone **obligaciones de proceso** al responsable
+# del producto. Por eso casi todas las entradas de este archivo son
+# `obligation`: no se aprueban ni se suspenden segun la concentracion, aplican
+# siempre y hay que poder demostrar que se cumplen.
+#
+# Esta diferencia estructural importa para el producto: la salida europea puede
+# decir "2.5 % excede el maximo de 2 %", y la estadounidense solo puede decir
+# "necesitas substanciacion documentada". Fingir lo contrario seria inventar una
+# precision que la ley no tiene.
+# ─────────────────────────────────────────────────────────────────────────────
+jurisdiction: us
+regulation: "MoCRA — Modernization of Cosmetics Regulation Act of 2022"
+authority: "FDA (Food and Drug Administration)"
+version: "FD&C Act, capitulo VI, subcapitulo A (segun enmienda de MoCRA)"
+checked_at: "2026-09-05"
+source: "https://www.fda.gov/cosmetics/cosmetics-laws-regulations/modernization-cosmetics-regulation-act-2022-mocra"
+disclaimer: >-
+  Verificacion preliminar basada en reglas. MoCRA impone obligaciones de
+  substanciacion, registro y farmacovigilancia; no publica un anexo general de
+  limites de concentracion por ingrediente. Contrastar con la guia vigente de la
+  FDA y con la normativa estatal aplicable.
+
+proximity_ratio: 0.8
+
+rules:
+  - id: us-talc-asbestos
+    type: restricted
+    requirement: "Ensayo de deteccion de amianto en productos con talco"
+    identifiers:
+      names: ["talco", "talc"]
+      cas: ["14807-96-6"]
+    limits:
+      - product_types: ["leave_on", "rinse_off", "other"]
+        max_pct: 100.0
+    conditions:
+      - >-
+        La FDA exige metodos normalizados de deteccion de amianto para productos
+        que contienen talco (seccion 3505 de MoCRA).
+    message: >-
+      El talco no tiene limite de concentracion, pero si un requisito de ensayo:
+      hay que demostrar ausencia de amianto con metodo normalizado.
+    source: "MoCRA, seccion 3505 — Talc-containing cosmetic products"
+    checked_at: "2026-09-05"
+
+obligations:
+  - id: us-safety-substantiation
+    requirement: "Substanciacion adecuada de la seguridad (FD&C Act §608)"
+    message: >-
+      La persona responsable debe conservar evidencia que sustente la seguridad
+      del producto. Tests, literatura publicada y modelos in silico documentados
+      pueden formar parte del expediente; ninguno por si solo lo constituye.
+    source: "FD&C Act §608, incorporado por MoCRA"
+    checked_at: "2026-09-05"
+
+  - id: us-facility-registration
+    requirement: "Registro de instalaciones y listado de productos (§607)"
+    message: >-
+      Las instalaciones de fabricacion o procesado deben registrarse ante la FDA,
+      y cada producto debe listarse con sus ingredientes.
+    source: "FD&C Act §607, incorporado por MoCRA"
+    checked_at: "2026-09-05"
+
+  - id: us-adverse-events
+    requirement: "Registro y notificacion de efectos adversos (§605)"
+    message: >-
+      Hay que conservar los registros de efectos adversos durante el plazo legal
+      y notificar los graves a la FDA en un plazo de 15 dias habiles.
+    source: "FD&C Act §605, incorporado por MoCRA"
+    checked_at: "2026-09-05"
+
+  - id: us-fragrance-allergens
+    requirement: "Declaracion de alergenos de fragancia en la etiqueta (§609)"
+    message: >-
+      Los alergenos de fragancia identificados por la FDA deben declararse en la
+      etiqueta segun la regla de aplicacion correspondiente.
+    source: "FD&C Act §609, incorporado por MoCRA"
+    checked_at: "2026-09-05"
